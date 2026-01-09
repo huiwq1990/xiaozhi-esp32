@@ -42,6 +42,24 @@ void McpServer::AddCommonTools() {
     // Do not add custom tools here.
     // Custom tools must be added in the board's InitializeTools function.
 
+    AddTool("self.wakeup", 
+        "Wake up module with parameters",
+        PropertyList({
+            Property("reason", kPropertyTypeString, "Reason for waking up")
+        }), 
+        [&board](const PropertyList& properties) -> ReturnValue {
+            std::string reason = properties["reason"].value<std::string>();
+            ESP_LOGI(TAG, "Wakeup Board By MCP: reason=%s", reason.c_str());
+    
+            auto display = Board::GetInstance().GetDisplay();
+            if (display) {
+                display->SetEmotion("neutral");
+            }
+            auto& app = Application::GetInstance();
+            app.WakeWordInvoke(reason);
+            return true;
+        });
+
     AddTool("self.get_device_status",
         "Provides the real-time information of the device, including the current status of the audio speaker, screen, battery, network, etc.\n"
         "Use this tool for: \n"
