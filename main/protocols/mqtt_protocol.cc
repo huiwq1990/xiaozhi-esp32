@@ -218,6 +218,7 @@ bool MqttProtocol::OpenAudioChannel() {
     xEventGroupClearBits(event_group_handle_, MQTT_PROTOCOL_SERVER_HELLO_EVENT);
 
     auto message = GetHelloMessage();
+    ESP_LOGI(TAG, "Sending mqtt hello message: %s", message.c_str());
     if (!SendText(message)) {
         return false;
     }
@@ -350,6 +351,7 @@ void MqttProtocol::ParseServerHello(const cJSON* root) {
 
     // auto encryption = cJSON_GetObjectItem(udp, "encryption")->valuestring;
     // ESP_LOGI(TAG, "UDP server: %s, port: %d, encryption: %s", udp_server_.c_str(), udp_port_, encryption);
+    ESP_LOGI(TAG, "UDP server: %s, port: %d", udp_server_.c_str(), udp_port_);
     aes_nonce_ = DecodeHexString(nonce);
     mbedtls_aes_init(&aes_ctx_);
     mbedtls_aes_setkey_enc(&aes_ctx_, (const unsigned char*)DecodeHexString(key).c_str(), 128);

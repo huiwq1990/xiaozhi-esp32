@@ -182,6 +182,8 @@ esp_err_t Ota::CheckVersion() {
         ESP_LOGI(TAG, "No websocket section found!");
     }
 
+    ESP_LOGI(TAG, "has_mqtt_config_: %d, has_websocket_config_: %d", has_mqtt_config_, has_websocket_config_);
+
     has_server_time_ = false;
     cJSON *server_time = cJSON_GetObjectItem(root, "server_time");
     if (cJSON_IsObject(server_time)) {

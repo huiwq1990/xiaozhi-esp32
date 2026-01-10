@@ -180,6 +180,7 @@ bool WebsocketProtocol::OpenAudioChannel() {
 
     // Send hello message to describe the client
     auto message = GetHelloMessage();
+    ESP_LOGI(TAG, "Sending websocket hello message: %s", message.c_str());
     if (!SendText(message)) {
         return false;
     }
