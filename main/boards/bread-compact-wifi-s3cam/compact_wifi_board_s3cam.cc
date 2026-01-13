@@ -17,7 +17,10 @@
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <driver/spi_common.h>
-
+#include "power_save_timer.h"
+#include "power_manager.h"
+#include <driver/rtc_io.h>
+#include <esp_sleep.h>
 #if defined(LCD_TYPE_ILI9341_SERIAL)
 #include "esp_lcd_ili9341.h"
 #endif
@@ -66,8 +69,11 @@ private:
  
     Button boot_button_;
     LcdDisplay* display_;
-     Esp32Camera* camera_;
-
+    Esp32Camera* camera_;
+    PowerSaveTimer* power_save_timer_;
+    PowerManager* power_manager_;
+    esp_lcd_panel_io_handle_t panel_io_ = nullptr;
+    esp_lcd_panel_handle_t panel_ = nullptr;
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
         buscfg.mosi_io_num = DISPLAY_MOSI_PIN;
@@ -153,8 +159,46 @@ private:
         config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
         camera_ = new Esp32Camera(config);
         camera_->SetHMirror(false);
+        camera_->SetVFlip(1);//OV3360设置为1
+    }
+void InitializePowerManager() {
+        power_manager_ = new PowerManager(GPIO_NUM_3);
+        power_manager_->OnChargingStatusChanged([this](bool is_charging) {
+            if (is_charging) {
+                power_save_timer_->SetEnabled(false);
+            } else {
+                power_save_timer_->SetEnabled(true);
+            }
+        });
     }
 
+    void InitializePowerSaveTimer() {
+        rtc_gpio_init(GPIO_NUM_48);
+        rtc_gpio_set_direction(GPIO_NUM_48, RTC_GPIO_MODE_OUTPUT_ONLY);
+        rtc_gpio_set_level(GPIO_NUM_48, 1);
+
+        power_save_timer_ = new PowerSaveTimer(-1, 60, 36000);
+        power_save_timer_->OnEnterSleepMode([this]() {
+            ESP_LOGI(TAG, "Enabling sleep mode");
+            display_->SetChatMessage("system", "");
+            display_->SetEmotion("sleepy");
+            GetBacklight()->SetBrightness(1);
+        });
+        power_save_timer_->OnExitSleepMode([this]() {
+            display_->SetChatMessage("system", "");
+            display_->SetEmotion("neutral");
+            GetBacklight()->RestoreBrightness();
+        });
+        power_save_timer_->OnShutdownRequest([this]() {
+            ESP_LOGI(TAG, "Shutting down");
+            rtc_gpio_set_level(GPIO_NUM_48, 0);
+            // 启用保持功能，确保睡眠期间电平不变
+            rtc_gpio_hold_en(GPIO_NUM_48);
+            esp_lcd_panel_disp_on_off(panel_, false); //关闭显示
+            esp_deep_sleep_start();
+        });
+        power_save_timer_->SetEnabled(true);
+    }
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
@@ -171,6 +215,8 @@ public:
         InitializeSpi();
         InitializeLcdDisplay();
         InitializeButtons();
+        InitializePowerManager();
+        InitializePowerSaveTimer();
         InitializeCamera();
         if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {
             GetBacklight()->RestoreBrightness();
@@ -209,6 +255,25 @@ public:
     virtual Camera* GetCamera() override {
         return camera_;
     }
+     virtual bool GetBatteryLevel(int& level, bool& charging, bool& discharging) override {
+        static bool last_discharging = false;
+        charging = power_manager_->IsCharging();
+        discharging = power_manager_->IsDischarging();
+        if (discharging != last_discharging) {
+            power_save_timer_->SetEnabled(discharging);
+            last_discharging = discharging;
+        }
+        level = power_manager_->GetBatteryLevel();
+        return true;
+    }
+
+    virtual void SetPowerSaveMode(bool enabled) override {
+        if (!enabled) {
+            power_save_timer_->WakeUp();
+        }
+        WifiBoard::SetPowerSaveMode(enabled);
+    }
+ 
 };
 
 DECLARE_BOARD(CompactWifiBoardS3Cam);

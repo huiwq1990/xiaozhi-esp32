@@ -7,8 +7,9 @@
 #include "config.h"
 #include "mcp_server.h"
 #include "lamp_controller.h"
+ 
 #include "led/single_led.h"
-
+#include "esp32_camera.h"
 #include <wifi_station.h>
 #include <esp_log.h>
 #include <driver/i2c_master.h>
@@ -16,7 +17,10 @@
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <driver/spi_common.h>
-
+#include "power_save_timer.h"
+#include "power_manager.h"
+#include <driver/rtc_io.h>
+#include <esp_sleep.h>
 #if defined(LCD_TYPE_ILI9341_SERIAL)
 #include "esp_lcd_ili9341.h"
 #endif
@@ -60,12 +64,19 @@ static const gc9a01_lcd_init_cmd_t gc9107_lcd_init_cmds[] = {
  
 #define TAG "CompactWifiBoardLCD"
 
+LV_FONT_DECLARE(font_puhui_16_4);
+LV_FONT_DECLARE(font_awesome_16_4);
+
 class CompactWifiBoardLCD : public WifiBoard {
 private:
  
     Button boot_button_;
     LcdDisplay* display_;
-
+    Esp32Camera* camera_;
+    PowerSaveTimer* power_save_timer_;
+    PowerManager* power_manager_;
+    esp_lcd_panel_io_handle_t panel_io_ = nullptr;
+    esp_lcd_panel_handle_t panel_ = nullptr;
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
         buscfg.mosi_io_num = DISPLAY_MOSI_PIN;
@@ -76,7 +87,76 @@ private:
         buscfg.max_transfer_sz = DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t);
         ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO));
     }
+    void InitializeCamera() {
+        camera_config_t config = {};
+        config.ledc_channel = LEDC_CHANNEL_2;   // LEDC通道选择  用于生成XCLK时钟 但是S3不用
+        config.ledc_timer = LEDC_TIMER_2;       // LEDC timer选择  用于生成XCLK时钟 但是S3不用
+        config.pin_d0 = CAMERA_PIN_D0;
+        config.pin_d1 = CAMERA_PIN_D1;
+        config.pin_d2 = CAMERA_PIN_D2;
+        config.pin_d3 = CAMERA_PIN_D3;
+        config.pin_d4 = CAMERA_PIN_D4;
+        config.pin_d5 = CAMERA_PIN_D5;
+        config.pin_d6 = CAMERA_PIN_D6;
+        config.pin_d7 = CAMERA_PIN_D7;
+        config.pin_xclk = CAMERA_PIN_XCLK;
+        config.pin_pclk = CAMERA_PIN_PCLK;
+        config.pin_vsync = CAMERA_PIN_VSYNC;
+        config.pin_href = CAMERA_PIN_HREF;
+        config.pin_sccb_sda = CAMERA_PIN_SIOD;  // 这里如果写-1 表示使用已经初始化的I2C接口
+        config.pin_sccb_scl = CAMERA_PIN_SIOC;
+        config.sccb_i2c_port = 1;               //  这里如果写1 默认使用I2C1
+        config.pin_pwdn = CAMERA_PIN_PWDN;
+        config.pin_reset = CAMERA_PIN_RESET;
+        config.xclk_freq_hz = XCLK_FREQ_HZ;
+        config.pixel_format = PIXFORMAT_RGB565;
+        config.frame_size = FRAMESIZE_VGA;
+        config.jpeg_quality = 12;
+        config.fb_count = 1;
+        config.fb_location = CAMERA_FB_IN_PSRAM;
+        config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
 
+        camera_ = new Esp32Camera(config);
+       // camera_->SetVFlip(1);//OV3360设置为1
+    }
+    void InitializePowerManager() {
+        power_manager_ = new PowerManager(GPIO_NUM_19);
+        power_manager_->OnChargingStatusChanged([this](bool is_charging) {
+            if (is_charging) {
+                power_save_timer_->SetEnabled(false);
+            } else {
+                power_save_timer_->SetEnabled(true);
+            }
+        });
+    }
+
+    void InitializePowerSaveTimer() {
+        rtc_gpio_init(GPIO_NUM_48);
+        rtc_gpio_set_direction(GPIO_NUM_48, RTC_GPIO_MODE_OUTPUT_ONLY);
+        rtc_gpio_set_level(GPIO_NUM_48, 1);
+
+        power_save_timer_ = new PowerSaveTimer(-1, 60, 36000);
+        power_save_timer_->OnEnterSleepMode([this]() {
+            ESP_LOGI(TAG, "Enabling sleep mode");
+            display_->SetChatMessage("system", "");
+            display_->SetEmotion("sleepy");
+            GetBacklight()->SetBrightness(1);
+        });
+        power_save_timer_->OnExitSleepMode([this]() {
+            display_->SetChatMessage("system", "");
+            display_->SetEmotion("neutral");
+            GetBacklight()->RestoreBrightness();
+        });
+        power_save_timer_->OnShutdownRequest([this]() {
+            ESP_LOGI(TAG, "Shutting down");
+            rtc_gpio_set_level(GPIO_NUM_48, 0);
+            // 启用保持功能，确保睡眠期间电平不变
+            rtc_gpio_hold_en(GPIO_NUM_48);
+            esp_lcd_panel_disp_on_off(panel_, false); //关闭显示
+            esp_deep_sleep_start();
+        });
+        power_save_timer_->SetEnabled(true);
+    }
     void InitializeLcdDisplay() {
         esp_lcd_panel_io_handle_t panel_io = nullptr;
         esp_lcd_panel_handle_t panel = nullptr;
@@ -85,7 +165,7 @@ private:
         esp_lcd_panel_io_spi_config_t io_config = {};
         io_config.cs_gpio_num = DISPLAY_CS_PIN;
         io_config.dc_gpio_num = DISPLAY_DC_PIN;
-        io_config.spi_mode = DISPLAY_SPI_MODE;
+        io_config.spi_mode = 3;
         io_config.pclk_hz = 40 * 1000 * 1000;
         io_config.trans_queue_depth = 10;
         io_config.lcd_cmd_bits = 8;
@@ -111,6 +191,7 @@ private:
 #endif
         
         esp_lcd_panel_reset(panel);
+ 
 
         esp_lcd_panel_init(panel);
         esp_lcd_panel_invert_color(panel, DISPLAY_INVERT_COLOR);
@@ -120,9 +201,12 @@ private:
         panel_config.vendor_config = &gc9107_vendor_config;
 #endif
         display_ = new SpiLcdDisplay(panel_io, panel,
-                                    DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
+                                    DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY
+                                    );
     }
 
+
+ 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
@@ -133,9 +217,17 @@ private:
         });
     }
 
+
     // 物联网初始化，添加对 AI 可见设备
-    void InitializeTools() {
+    void InitializeIot() {
+#if CONFIG_IOT_PROTOCOL_XIAOZHI
+        auto& thing_manager = iot::ThingManager::GetInstance();
+        thing_manager.AddThing(iot::CreateThing("Speaker"));
+        thing_manager.AddThing(iot::CreateThing("Screen"));
+        thing_manager.AddThing(iot::CreateThing("Lamp"));
+#elif CONFIG_IOT_PROTOCOL_MCP
         static LampController lamp(LAMP_GPIO);
+#endif
     }
 
 public:
@@ -144,18 +236,24 @@ public:
         InitializeSpi();
         InitializeLcdDisplay();
         InitializeButtons();
-        InitializeTools();
+        InitializePowerManager();
+        InitializePowerSaveTimer();
+        InitializeIot();
+        InitializeCamera();
         if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {
             GetBacklight()->RestoreBrightness();
         }
         
+
     }
 
     virtual Led* GetLed() override {
         static SingleLed led(BUILTIN_LED_GPIO);
         return &led;
     }
-
+    virtual Camera* GetCamera() override {
+        return camera_;
+    }
     virtual AudioCodec* GetAudioCodec() override {
 #ifdef AUDIO_I2S_METHOD_SIMPLEX
         static NoAudioCodecSimplex audio_codec(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
@@ -177,6 +275,24 @@ public:
             return &backlight;
         }
         return nullptr;
+    }
+    virtual bool GetBatteryLevel(int& level, bool& charging, bool& discharging) override {
+        static bool last_discharging = false;
+        charging = power_manager_->IsCharging();
+        discharging = power_manager_->IsDischarging();
+        if (discharging != last_discharging) {
+            power_save_timer_->SetEnabled(discharging);
+            last_discharging = discharging;
+        }
+        level = power_manager_->GetBatteryLevel();
+        return true;
+    }
+
+    virtual void SetPowerSaveMode(bool enabled) override {
+        if (!enabled) {
+            power_save_timer_->WakeUp();
+        }
+        WifiBoard::SetPowerSaveMode(enabled);
     }
 };
 
