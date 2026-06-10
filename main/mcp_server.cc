@@ -45,18 +45,20 @@ void McpServer::AddCommonTools() {
     AddTool("self.wakeup", 
         "Wake up module with parameters",
         PropertyList({
+            Property("event", kPropertyTypeString, "Event type"),
             Property("reason", kPropertyTypeString, "Reason for waking up")
         }), 
         [&board](const PropertyList& properties) -> ReturnValue {
             std::string reason = properties["reason"].value<std::string>();
-            ESP_LOGI(TAG, "Wakeup Board By MCP: reason=%s", reason.c_str());
+            std::string event = properties["event"].value<std::string>();
+            ESP_LOGI(TAG, "Wakeup Board By MCP: event=%s, reason=%s",event.c_str(), reason.c_str());
     
             auto display = Board::GetInstance().GetDisplay();
             if (display) {
                 display->SetEmotion("neutral");
             }
             auto& app = Application::GetInstance();
-            app.WakeWordInvoke(reason);
+            app.WakeWordInvokeFromAnyState("$@_joybox_$@_" + event + "_$@_" + reason);
             return true;
         });
 

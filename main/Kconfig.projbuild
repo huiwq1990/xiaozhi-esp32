@@ -3,7 +3,7 @@ menu "Xiaozhi Assistant"
 config OTA_URL
     string "Default OTA URL"
     #default "http://xiaozhi-server.joyhome.local/xiaozhi/ota/"
-    default "http://172.22.22.85:30162/xiaozhi/ota/"
+    default "http://192.168.255.129:30162/xiaozhi/ota/"
     help
         The application will access this URL to check for new firmwares and server address.
 

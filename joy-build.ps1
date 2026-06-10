@@ -3,7 +3,7 @@
 # 示例: .\joy-build.ps1 COM3
 
 param(
-    [string]$Port = "COM4"
+    [string]$Port = "COM3"
 )
 
 $cachePath = "D:\idfcache"

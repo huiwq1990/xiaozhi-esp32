@@ -940,13 +940,49 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
     }
 }
 
+void Application::WakeWordInvokeFromAnyState(const std::string& wake_word) {
+    if (!protocol_) {
+        ESP_LOGW(TAG, "Cannot invoke wake word from any state: protocol not initialized");
+        return;
+    }
+
+    auto state = GetDeviceState();
+    ESP_LOGI(TAG, "Wake word invoke from state: %s", DeviceStateMachine::GetStateName(state));
+
+    switch (state) {
+        case kDeviceStateIdle:
+            WakeWordInvoke(wake_word);
+            return;
+        case kDeviceStateListening:
+            protocol_->SendStopListening();
+            break;
+        case kDeviceStateSpeaking:
+            AbortSpeaking(kAbortReasonWakeWordDetected);
+            break;
+        default:
+            ESP_LOGW(TAG, "Skip wake word invoke from protected state: %s",
+                DeviceStateMachine::GetStateName(state));
+            return;
+    }
+
+    if (!SetDeviceState(kDeviceStateIdle)) {
+        ESP_LOGW(TAG, "Cannot switch to idle for wake word invoke from state: %s",
+            DeviceStateMachine::GetStateName(state));
+        return;
+    }
+
+    Schedule([this, wake_word]() {
+        WakeWordInvoke(wake_word);
+    });
+}
+
 void Application::WakeWordInvoke(const std::string& wake_word) {
     if (!protocol_) {
         return;
     }
 
     auto state = GetDeviceState();
-    
+        
     if (state == kDeviceStateIdle) {
         audio_service_.EncodeWakeWord();
 
@@ -973,16 +1009,6 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
         play_popup_on_listening_ = true;
         SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
 #endif
-    } else if (state == kDeviceStateSpeaking) {
-        Schedule([this]() {
-            AbortSpeaking(kAbortReasonNone);
-        });
-    } else if (state == kDeviceStateListening) {   
-        Schedule([this]() {
-            if (protocol_) {
-                protocol_->CloseAudioChannel();
-            }
-        });
     }
 }
 
@@ -1053,4 +1079,3 @@ void Application::ResetProtocol() {
         protocol_.reset();
     });
 }
-

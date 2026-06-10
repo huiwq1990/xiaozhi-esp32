@@ -130,6 +130,24 @@ bool DeviceStateMachine::TransitionTo(DeviceState new_state) {
     return true;
 }
 
+bool DeviceStateMachine::ForceTransitionTo(DeviceState new_state) {
+    if (new_state < kDeviceStateUnknown || new_state > kDeviceStateFatalError) {
+        ESP_LOGW(TAG, "Invalid forced state: %d", static_cast<int>(new_state));
+        return false;
+    }
+
+    DeviceState old_state = current_state_.load();
+    if (old_state == new_state) {
+        return true;
+    }
+
+    current_state_.store(new_state);
+    ESP_LOGW(TAG, "Force state: %s -> %s",
+             GetStateName(old_state), GetStateName(new_state));
+    NotifyStateChange(old_state, new_state);
+    return true;
+}
+
 int DeviceStateMachine::AddStateChangeListener(StateCallback callback) {
     std::lock_guard<std::mutex> lock(mutex_);
     int id = next_listener_id_++;

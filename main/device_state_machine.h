@@ -36,6 +36,11 @@ public:
     bool TransitionTo(DeviceState new_state);
 
     /**
+     * Force transition to a new state without validating the transition graph.
+     */
+    bool ForceTransitionTo(DeviceState new_state);
+
+    /**
      * Check if transition to target state is valid from current state
      */
     bool CanTransitionTo(DeviceState target) const;
