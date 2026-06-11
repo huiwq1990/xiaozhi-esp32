@@ -1009,6 +1009,16 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
         play_popup_on_listening_ = true;
         SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
 #endif
+    } else if (state == kDeviceStateSpeaking) {
+        Schedule([this]() {
+            AbortSpeaking(kAbortReasonNone);
+        });
+    } else if (state == kDeviceStateListening) {   
+        Schedule([this]() {
+            if (protocol_) {
+                protocol_->CloseAudioChannel();
+            }
+        });
     }
 }
 
@@ -1079,3 +1089,4 @@ void Application::ResetProtocol() {
         protocol_.reset();
     });
 }
+
